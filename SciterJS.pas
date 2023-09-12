@@ -3,7 +3,7 @@ unit SciterJS;
 interface
 
 uses
-  Windows, Forms, Messages, Controls, Classes, SysUtils, Contnrs, Variants, Math, Graphics, Generics.Collections,
+  Windows, Messages, Classes, SysUtils, Contnrs, Variants, Math, Generics.Collections,
   SciterJSAPI;
 
 type
@@ -727,8 +727,9 @@ type
     property OnTimer: TElementOnTimer read GetOnTimer write SetOnTimer;
   end;
 
-  TSciter = class(TCustomControl, _ISciterEventHandler)
+  TSciter = class(TInterfacedPersistent, _ISciterEventHandler)
   private
+    FHandle: HWINDOW;
     FBaseUrl: WideString;
     FEventList: TInterfaceList;
     FEventMap: TSciterEventMap;
@@ -752,10 +753,12 @@ type
     FOnViewSize: TElementOnSize;
     FUrl: WideString;
     procedure BindStoredEventHandlers;
+    function GetHandle: HWINDOW;
     function GetHtml: WideString;
     function GetRoot: IElement;
     function GetVersion: WideString;
     function GetFocused: IElement;
+    function HandleAllocated: Boolean;
     function HandleBehaviorAttach: BOOL;
     function HandleBehaviorDetach: BOOL;
     function HandleControlEvent(var params: BEHAVIOR_EVENT_PARAMS): BOOL;
@@ -771,15 +774,9 @@ type
     function HandleScrollEvents(var params: SCROLL_PARAMS): BOOL;
     function HandleSize: BOOL;
     function HandleTimer(var params: TIMER_PARAMS): BOOL;
-    function MainWindowHook(var Message: TMessage): Boolean;
     function QuerySubscriptionEvents: EVENT_GROUPS;
     procedure SetOnMessage(const Value: TSciterOnMessage);
   protected
-    procedure CreateParams(var Params: TCreateParams); override;
-    procedure CreateWindowHandle(const Params: TCreateParams); override;
-    procedure CreateWnd; override;
-    function DesignMode: boolean;
-    procedure DestroyWnd; override;
     procedure DoDocumentComplete(const Args: TSciterOnDocumentCompleteEventArgs); virtual;
     procedure DoViewControlEvent(const Args: TElementOnControlEventArgs); virtual;
     procedure DoViewFocus(const Args: TElementOnFocusEventArgs); virtual;
@@ -793,13 +790,9 @@ type
     function HandleEngineDestroyed(var data: SCN_ENGINE_DESTROYED): UINT; virtual;
     function HandleLoadData(var data: SCN_LOAD_DATA): UINT; virtual;
     function HandlePostedNotification(var data: SCN_POSTED_NOTIFICATION): UINT; virtual;
-    procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Integer); override;
-    procedure Paint; override;
-    procedure SetName(const NewName: TComponentName); override;
-    procedure WndProc(var Message: TMessage); override;
     property ManagedElements: TElementList read FManagedElements;
   public
-    constructor Create(AOwner: TComponent); override;
+    constructor Create(Window: HWINDOW = 0);
     destructor Destroy; override;
     function RecordToVar<T>(const Obj: T): Variant;
     function SymbolToVar(const Symbol: String): Variant;
@@ -824,9 +817,7 @@ type
     function LoadURL(const URL: WideString; Async: Boolean = True { reserved }): Boolean;
     function LoadPackedResource(const ResName: String; const ResType: PWideChar): Boolean;
     function GetPackedItem(const ResName: String; const FileName: PWideChar; var mem: TMemoryStream): Boolean;
-    procedure MouseWheelHandler(var Message: TMessage); override;
     class procedure RegisterNativeFunctor(var OutVal: TSciterValue; Name: PWideChar; Handler: Pointer; Tag: Pointer = nil);
-    procedure SaveToFile(const FileName: WideString; const Encoding: WideString = 'UTF-8' { reserved, TODO:} );
     function SciterValueToJson(Obj: TSciterValue): WideString;
     function Select(const Selector: WideString): IElement;
     function SelectAll(const Selector: WideString): IElementCollection;
@@ -839,52 +830,13 @@ type
     procedure UnsubscribeAll;
     procedure UpdateWindow;
     procedure Refresh;
+    property Handle: HWINDOW read GetHandle;
     property Html: WideString read GetHtml;
     property Root: IElement read GetRoot;
     property Focused: IElement read GetFocused;
     property Version: WideString read GetVersion;
   published
-    property Action;
-    property Align;
-    property Anchors;
-    property BevelEdges;
-    property BevelInner;
-    property BevelKind;
-    property BevelOuter;
-    property BevelWidth;
-    property BiDiMode;
-    property BorderWidth;
-    property Constraints;
-    property DragCursor;
-    property DragKind;
-    property DragMode;
-    property Enabled;
     property EventMap: TSciterEventMap read FEventMap write FEventMap;
-    property Font;
-    property OnClick;
-    property OnContextPopup;
-    property OnDragDrop;
-    property OnDragOver;
-    property OnEndDock;
-    property OnEndDrag;
-    property OnEnter;
-    property OnExit;
-    property OnKeyDown;
-    property OnKeyPress;
-    property OnKeyUp;
-    property OnMouseDown;
-    property OnMouseMove;
-    property OnMouseUp;
-    property OnStartDock;
-    property OnStartDrag;
-    property ParentBiDiMode;
-    property ParentFont;
-    property ParentShowHint;
-    property PopupMenu;
-    property ShowHint;
-    property TabOrder;
-    property TabStop default False;
-    property Visible;
     property OnFocus: TSciterOnFocus read FOnFocus write FOnFocus;
     property OnDataLoaded: TSciterOnDataLoaded read FOnDataLoaded write FOnDataLoaded;
     property OnDocumentComplete: TSciterOnDocumentComplete read FOnDocumentComplete write FOnDocumentComplete;
@@ -925,15 +877,10 @@ procedure SciterRegisterBehavior(Cls: TElementClass);
 
 function LoadResourceAsStream(const ResName: String; const ResType: PWideChar): TCustomMemoryStream;
 
-procedure Register;
-
 var
   PackedRes: TDictionary<String, HSARCHIVE>;
 
 implementation
-
-uses
-  Winapi.MLang;
 
 var
   Behaviors: TList;
@@ -1315,24 +1262,68 @@ begin
   Result := _SciterGenericEventProc(pSciter, evtg, prms);
 end;
 
-constructor TSciter.Create(AOwner: TComponent);
+function WindowDelegate(hwnd: HWINDOW; msg: UINT; wParam: WPARAM; lParam: LPARAM; pParam: LPVOID; var pbHANDLED: BOOL): LRESULT; stdcall;
 begin
-  inherited Create(AOwner);
+  Result := API.SciterProcND(hwnd, msg, wParam, lParam, pbHANDLED);
+end;
+
+function CreateInvisibleWindow: HWINDOW;
+var
+  Frame: TRect;
+begin
+  Frame.Left := -9999;
+  Frame.Top := -9999;
+  Frame.Width := 0;
+  Frame.Height := 0;
+  Result := API.SciterCreateWindow(SW_MAIN, Frame, @WindowDelegate, nil, 0);
+end;
+
+constructor TSciter.Create(Window: HWINDOW = 0);
+var
+  SR: SCDOM_RESULT;
+begin
   SetExceptionMask(GetExceptionMask + [exInvalidOp, exOverflow, exUnderflow]);
-  Application.HookMainWindow(MainWindowHook);
   FEventMap := TSciterEventMap.Create(Self, TSciterEventMapRule);
   FEventList := TInterfaceList.Create;
   FManagedElements := TElementList.Create(False);
-  Width := 300;
-  Height := 300;
+
+  if Window = 0 then
+    Window := CreateInvisibleWindow;
+  if Window = 0 then
+    SciterError('Cannot find window to embed Sciter in!');
+  FHandle := Window;
+
+  API.SciterSetCallback(Handle, LPSciterHostCallback(@HostCallback), Self);
+
+  SR := API.SciterWindowAttachEventHandler(Handle, LPELEMENT_EVENT_PROC(@_SciterViewEventProc), Self, UINT(HANDLE_ALL));
+  if SR <> SCDOM_OK then
+    SciterError('Failed to setup Sciter window element callback function.');
+
+  API.SciterSetupDebugOutput(Handle, Self, PDEBUG_OUTPUT_PROC(@SciterDebug));
+
+  API.SciterSetHomeURL(Handle, PWideChar(FHomeURL));
+
+  if FHtml <> '' then
+    LoadHtml(FHtml, FBaseUrl)
+  else if FUrl <> '' then
+    LoadURL(FUrl);
+
+  if Assigned(FOnHandleCreated) then
+    FOnHandleCreated(Self);
 end;
 
 destructor TSciter.Destroy;
+var
+  pbHandled: BOOL;
 begin
+  API.SciterSetCallback(Handle, nil, nil);
+  API.SciterWindowDetachEventHandler(Handle, LPELEMENT_EVENT_PROC(@_SciterViewEventProc), Self);
+  API.SciterSetupDebugOutput(Handle, nil, nil);
+  API.SciterProcND(Handle, WM_DESTROY, 0, 0, pbHandled);
+
   FreeAndNil(FEventList);
   FreeAndNil(FManagedElements);
   FreeAndNil(FEventMap);
-  Application.UnhookMainWindow(MainWindowHook);
   inherited;
 end;
 
@@ -1409,47 +1400,6 @@ begin
   API.ValueClear(@pVal);
 end;
 
-procedure TSciter.CreateParams(var Params: TCreateParams);
-begin
-  inherited CreateParams(Params);
-  Params.Style := Params.Style or WS_CHILD or WS_VISIBLE;
-  if TabStop then
-    Params.Style := Params.Style or WS_TABSTOP;
-  Params.ExStyle := Params.ExStyle or WS_EX_CONTROLPARENT;
-end;
-
-procedure TSciter.CreateWindowHandle(const Params: TCreateParams);
-begin
-  inherited;
-end;
-
-procedure TSciter.CreateWnd;
-var
-  SR: SCDOM_RESULT;
-begin
-  inherited CreateWnd;
-  if DesignMode then
-    Exit;
-
-  API.SciterSetCallback(Handle, LPSciterHostCallback(@HostCallback), Self);
-
-  SR := API.SciterWindowAttachEventHandler(Handle, LPELEMENT_EVENT_PROC(@_SciterViewEventProc), Self, UINT(HANDLE_ALL));
-  if SR <> SCDOM_OK then
-    SciterError('Failed to setup Sciter window element callback function.');
-
-  API.SciterSetupDebugOutput(Handle, Self, PDEBUG_OUTPUT_PROC(@SciterDebug));
-
-  API.SciterSetHomeURL(Handle, PWideChar(FHomeURL));
-
-  if FHtml <> '' then
-    LoadHtml(FHtml, FBaseUrl)
-  else if FUrl <> '' then
-    LoadURL(FUrl);
-
-  if Assigned(FOnHandleCreated) then
-    FOnHandleCreated(Self);
-end;
-
 procedure TSciter.DataReady(const uri: WideString; data: PByte; dataLength: UINT);
 begin
   if not API.SciterDataReady(Handle, PWideChar(uri), data, dataLength) then
@@ -1460,25 +1410,6 @@ procedure TSciter.DataReadyAsync(const uri: WideString; data: PByte; dataLength:
 begin
   if not API.SciterDataReadyAsync(Handle, PWideChar(uri), data, dataLength, requestId) then
     SciterWarning('Failed to handle resource "%s".', [AnsiString(uri)]);
-end;
-
-function TSciter.DesignMode: boolean;
-begin
-  Result := csDesigning in ComponentState;
-end;
-
-procedure TSciter.DestroyWnd;
-var
-  pbHandled: BOOL;
-begin
-  if DesignMode then
-    Exit;
-
-  API.SciterSetCallback(Handle, nil, nil);
-  API.SciterWindowDetachEventHandler(Handle, LPELEMENT_EVENT_PROC(@_SciterViewEventProc), Self);
-  API.SciterSetupDebugOutput(Handle, nil, nil);
-  API.SciterProcND(Handle, WM_DESTROY, 0, 0, pbHandled);
-  inherited;
 end;
 
 procedure TSciter.DoDocumentComplete(const Args: TSciterOnDocumentCompleteEventArgs);
@@ -1582,6 +1513,16 @@ end;
 function TSciter.GetElementByHandle(Handle: NativeInt): IElement;
 begin
   Result := ElementFactory(Self, HELEMENT(Handle));
+end;
+
+function TSciter.GetHandle: HWINDOW;
+begin
+  Result := FHandle;
+end;
+
+function TSciter.HandleAllocated: Boolean;
+begin
+  Result := not (FHandle = 0);
 end;
 
 function TSciter.GetHtml: WideString;
@@ -1729,9 +1670,6 @@ begin
       pArgs.Free;
     end;
   end;
-
-  // Temporary fix: sometimes bottom part of document stays invisible until parent form gets resized
-  API.SciterProcND(Handle, WM_SIZE, 0, MAKELPARAM(ClientRect.Right - ClientRect.Left, ClientRect.Bottom - ClientRect.Top), bHandled);
 end;
 
 function TSciter.HandleEngineDestroyed(var data: SCN_ENGINE_DESTROYED): UINT;
@@ -1958,9 +1896,6 @@ function TSciter.LoadURL(const URL: WideString; Async: Boolean = True): Boolean;
 begin
   Result := False;
   
-  if DesignMode then
-    Exit;
-
   FUrl := URL;
   FHtml := '';
   FBaseUrl := '';
@@ -2008,78 +1943,6 @@ begin
   end;
 end;
 
-function TSciter.MainWindowHook(var Message: TMessage): Boolean;
-begin
-  Result := False;
-  if Message.Msg = WM_ENABLE then
-    Result := True;
-end;
-
-{ Tweaking TWinControl focus behavior }
-procedure TSciter.MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
-begin
-  inherited MouseDown(Button, Shift, X, Y);
-  //SetFocus;
-end;
-
-{ Tweaking TWinControl MouseWheel behavior }
-procedure TSciter.MouseWheelHandler(var Message: TMessage);
-var
-  pMsg: TWMMouseWheel;
-begin
-  pMsg := TWMMouseWheel(Message);
-  if pMsg.WheelDelta < 0 then
-    Perform(WM_VSCROLL, 1, 0)
-  else
-    Perform(WM_VSCROLL, 0, 0);
-end;
-
-procedure TSciter.Paint;
-var
-  sCaption: String;
-  iWidth: Integer;
-  iHeight: Integer;
-  X, Y: Integer;
-  pIcon: TBitmap;
-  hBmp: HBITMAP;
-begin
-  inherited;
-
-  if DesignMode then
-  begin
-    sCaption := Name;
-     
-    pIcon := nil;
-    
-    hBMP := LoadBitmap(hInstance, 'TSCITER');
-    if hBMP <> 0 then
-    begin
-      pIcon := TBitmap.Create;
-      pIcon.Handle := hBMP;
-    end;
-    
-    Canvas.Brush.Color := clWindow;
-    iWidth := Canvas.TextWidth(sCaption) + 28;
-    iHeight := Max(Canvas.TextHeight(sCaption), 28);
-    X := Round(ClientWidth / 2) - Round(iWidth / 2);
-    Y := Round(ClientHeight / 2) - Round(iHeight / 2);
-    Canvas.FillRect(ClientRect);
-
-    if pIcon <> nil then
-      Canvas.Draw(X, Y, pIcon);
-      
-    Canvas.TextOut(X + 28, Y + 5, Name);
-
-    if pIcon <> nil then
-    begin
-      pIcon.Free;
-    end;
-
-    if hBmp <> 0 then
-      DeleteObject(hBmp);
-  end;
-end;
-
 function TSciter.QuerySubscriptionEvents: EVENT_GROUPS;
 begin
   Result := HANDLE_ALL;
@@ -2096,61 +1959,6 @@ begin
   API.ValueSetValueToKey(@OutVal, @Key, @Val);
   API.ValueClear(@Key);
   API.ValueClear(@Val);
-end;
-
-{ Exprerimental }
-procedure TSciter.SaveToFile(const FileName, Encoding: WideString);
-var
-  pLang: IMultiLanguage;
-  pInfo: tagMIMECSETINFO;
-  pInfo1: tagMIMECPINFO;
-  pdwMode: Cardinal;
-  pcSrcSize: UINT;
-  pcDstSize: UINT;
-  pRet: PAnsiChar;
-  sHtml: WideString;
-  enc: Cardinal;
-  pStm: TFileStream;
-  flags: Word;
-begin
-  sHtml := Self.Html;
-
-  pdwMode := 0;
-  pLang := CoCMultiLanguage.Create;
-  pRet := nil;
-  try
-    pLang.GetCharsetInfo(Encoding, pInfo);
-    pLang.GetCodePageInfo(pInfo.uiCodePage, pInfo1);
-
-    // encoding
-    if pInfo.uiInternetEncoding = 0 then
-      enc := pInfo.uiCodePage
-    else
-      enc := pInfo.uiInternetEncoding;
-      
-    // input string is null-terminated
-    pcsrcSize := UINT(-1);
-    // Get buffer size
-    pLang.ConvertStringFromUnicode(pdwMode, enc, PWideChar(sHtml), @pcSrcSize, nil, pcDstSize);
-    // Performing conversion
-    GetMem(pRet, pcDstSize + 2);
-    pLang.ConvertStringFromUnicode(pdwMode, enc, PWideChar(sHtml), @pcSrcSize, pRet, pcDstSize);
-
-    flags := fmOpenWrite;
-    if not FileExists(FileName) then
-      Flags := Flags or fmCreate;
-
-    pStm := TFileStream.Create(FileName, flags, fmShareDenyNone);
-    try
-      pStm.Write(pRet^, pcDstSize);
-    finally
-      pStm.Free;
-    end;
-  finally
-    pLang := nil;
-    if pRet <> nil then
-      FreeMem(pRet, pcDstSize + 2);
-  end;
 end;
 
 function TSciter.SciterValueToJson(Obj: TSciterValue): WideString;
@@ -2203,13 +2011,6 @@ end;
 function TSciter.SetMediaType(const MediaType: WideString): Boolean;
 begin
   Result := API.SciterSetMediaType(Handle, PWideChar(MediaType));
-end;
-
-procedure TSciter.SetName(const NewName: TComponentName);
-begin
-  inherited;
-  if DesignMode then
-    Invalidate;
 end;
 
 procedure TSciter.SetOnMessage(const Value: TSciterOnMessage);
@@ -2301,58 +2102,6 @@ procedure TSciter.Refresh;
 begin
   if not (FUrl = '') then
     LoadURL(FUrl);
-end;
-
-procedure TSciter.WndProc(var Message: TMessage);
-var
-  llResult: LRESULT;
-  bHandled: BOOL;
-  M: PMsg;
-begin
-  if DesignMode then
-  begin
-    inherited WndProc(Message);
-    Exit;
-  end;
-
-  case Message.Msg of
-    WM_SETFOCUS:
-      begin
-        if Assigned(FOnFocus) then
-          FOnFocus(Self);
-      end;
-
-    WM_GETDLGCODE:
-      // Tweaking arrow keys and TAB handling (VCL-specific)
-      begin
-        Message.Result := DLGC_WANTALLKEYS or DLGC_WANTARROWS or DLGC_WANTCHARS or DLGC_HASSETSEL;
-        if TabStop then
-          Message.Result := Message.Result or DLGC_WANTTAB;
-        if Message.lParam <> 0 then
-        begin
-          M := PMsg(Message.lParam);
-          case M.Message of
-            WM_SYSKEYDOWN, WM_SYSKEYUP, WM_SYSCHAR,
-            WM_KEYDOWN, WM_KEYUP, WM_CHAR:
-            begin
-              Perform(M.message, M.wParam, M.lParam);
-              // Message.Result := Message.Result or DLGC_WANTMESSAGE or DLGC_WANTTAB;
-            end;
-          end;
-        end;
-        Exit;
-      end;
-  end;
-
-  bHandled := False;
-  llResult := 0;
-  if IsWindow(Handle) then
-    llResult := API.SciterProcND(Handle, Message.Msg, Message.WParam, Message.LParam, bHandled);
-
-  if bHandled then
-    Message.Result := llResult
-  else
-    inherited WndProc(Message);
 end;
 
 function TSciter.RecordToVar<T>(const Obj: T): Variant;
@@ -3768,13 +3517,6 @@ begin
     Item[i].Delete;
   end;
   FList.Clear;
-end;
-
-procedure Register;
-begin
-  RegisterClass(TSciterEventMapRule);
-  RegisterClass(TSciterEventMap);
-  RegisterComponents('Samples', [TSciter]);
 end;
 
 { TElementList }

@@ -7,5 +7,10 @@
 Minimal Sciter.JS bindings for Delphi.
 
 ## Installation
-* Include SciterJS.pas and SciterJSAPI.pas units in your project, create TSciter class instance
 * Copy sciter.dll from [Sciter SDK](http://sciter.com/download/) to your exe directory (or define SCITER_DLL_DIR variable)
+* Include SciterJS.pas and SciterJSAPI.pas units in your project, create TSciter class instance
+
+## Embedding
+TSciter constructor expects a window handle as a parameter to embed document into.<br>
+If handle is not provided then invisible window will be created.<br>
+Example of embedding Sciter as a Delphi component can be found in *SciterEmbedded.pas*

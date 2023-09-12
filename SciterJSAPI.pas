@@ -677,7 +677,22 @@ type
     OUTPUT_SEVERITY_DUMMY = MAXINT
   );
 
-  SciterWindowDelegate = function(hwnd: HWINDOW; msg: UINT; w: WParam; l: LPARAM; pParam: LPVOID; var pResult: LRESULT): BOOL; stdcall;
+  SCITER_CREATE_WINDOW_FLAGS =
+  (
+    SW_CHILD      =   1 shl 0, // child window only, if this flag is set all other flags ignored
+    SW_TITLEBAR   =   1 shl 1, // toplevel window, has titlebar
+    SW_RESIZEABLE =   1 shl 2, // has resizeable frame
+    SW_TOOL       =   1 shl 3, // is tool window
+    SW_CONTROLS   =   1 shl 4, // has minimize / maximize buttons
+    SW_GLASSY     =   1 shl 5, // glassy window - supports "Acrylic" on Windows and "Vibrant" on MacOS.
+    SW_ALPHA      =   1 shl 6, // transparent window ( e.g. WS_EX_LAYERED on Windows )
+    SW_MAIN       =   1 shl 7, // main window of the app, will terminate the app on close
+    SW_POPUP      =   1 shl 8, // the window is created as topmost window.
+    SW_ENABLE_DEBUG = 1 shl 9, // make this window inspector ready
+    SW_OWNS_VM      = 1 shl 10 // it has its own script VM
+  );
+
+  SciterWindowDelegate = function(hwnd: HWINDOW; msg: UINT; wParam: WPARAM; lParam: LPARAM; pParam: LPVOID; var pbHANDLED: BOOL): LRESULT; stdcall;
   PSciterWindowDelegate = ^SciterWindowDelegate;
 
   ISciterRAPI = record
@@ -775,7 +790,7 @@ type
     SciterSetHomeURL: function(hWndSciter: HWINDOW; baseUrl: PWideChar): BOOL; stdcall;
     SciterCreateNSView: TProcPointer;
     SciterCreateWidget: TProcPointer;
-    SciterCreateWindow: function(creationFlags: UINT; var frame: TRect; delegate: PSciterWindowDelegate; delegateParam: LPVOID; parent: HWINDOW): HWINDOW; stdcall;
+    SciterCreateWindow: function(creationFlags: SCITER_CREATE_WINDOW_FLAGS; var frame: TRect; delegate: PSciterWindowDelegate; delegateParam: LPVOID; parent: HWINDOW): HWINDOW; stdcall;
     SciterSetupDebugOutput: procedure(hwndOrNull: HWINDOW; param: Pointer; pfOutput: PDEBUG_OUTPUT_PROC); stdcall;
 
 //|
