@@ -911,7 +911,7 @@ type
     ValueInt64DataSet: function(Value: PSciterValue; data: Int64; iType: TSciterValueType; units: UINT): UINT; stdcall;
     ValueFloatData: function(Value: PSciterValue; var pData: double): UINT; stdcall;
     ValueFloatDataSet: function(Value: PSciterValue; data: double; iType: TSciterValueType; units: UINT): UINT; stdcall;
-    ValueBinaryData: function(Value: PSciterValue; var bytes: PByte; var pnBytes: UINT): UINT; stdcall; 
+    ValueBinaryData: function(Value: PSciterValue; var bytes: PByte; var pnBytes: UINT): UINT; stdcall;
     ValueBinaryDataSet: function(Value: PSciterValue; bytes: PByte; nBytes: UINT; pType: TSciterValueType; units: UINT): UINT; stdcall;
     ValueElementsCount: function(Value: PSciterValue; var pData: UINT): UINT; stdcall;
     ValueNthElementValue: function(Value: PSciterValue; n: Integer; var retval: TSciterValue): UINT; stdcall;
@@ -1551,6 +1551,7 @@ var
   i64Result: Int64;
   ft: TFileTime;
   pbResult: PByte;
+  pResult: Pointer;
   cResult: Currency;
   st: SYSTEMTIME;
   //pDispValue: IDispatch;
@@ -1645,7 +1646,13 @@ begin
         OutValue := Null;
         Result := HV_OK;
       end;
-    T_OBJECT, T_RESOURCE:
+    T_RESOURCE:
+    begin
+      pResult := 0;
+      API.SciterElementUnwrap(Value, pResult);
+      OutValue := NativeInt(pResult);
+    end;
+    T_OBJECT:
       // TODO: returns Variant if Object wraps IDispatch, JSON otherwise
       begin
         pbResult := nil;
@@ -1665,11 +1672,8 @@ begin
               OutValue := NativeInt(pbResult);
               Result := HV_OK;
 //            end;
-          end
-            else
-          begin
+          end else
             OutValue := Unassigned;
-          end;
         end
           else
         begin

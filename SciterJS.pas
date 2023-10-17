@@ -4026,7 +4026,7 @@ var
 begin
   for var ClassMethods in Methods do
     for var Method in ClassMethods.Value do
-      TSciter.RegisterNativeFunctor(ReturnValue, PWideChar(Method.Key), @Method.Value, nil);
+      TSciter.RegisterNativeFunctor(ReturnValue, PWideChar(Method.Key), @Method.Value);
 end;
 
 initialization
